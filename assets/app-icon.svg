@@ -1,0 +1,25 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="background" x1="148" y1="96" x2="876" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171B26"/>
+      <stop offset="1" stop-color="#090B10"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="254" y1="244" x2="788" y2="794" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#66E3C4"/>
+      <stop offset="0.48" stop-color="#4CC9F0"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <filter id="glow" x="156" y="156" width="712" height="712" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+  <rect x="49" y="49" width="926" height="926" rx="207" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="34"/>
+  <circle cx="512" cy="512" r="282" stroke="url(#ring)" stroke-opacity="0.22" stroke-width="76" filter="url(#glow)"/>
+  <path d="M739 685C686 754 603 798 510 798C352 798 224 670 224 512C224 354 352 226 510 226C601 226 682 268 735 333" stroke="url(#ring)" stroke-width="92" stroke-linecap="round"/>
+  <path d="M690 240L716 311L787 337L716 363L690 434L664 363L593 337L664 311L690 240Z" fill="#F8FAFF"/>
+  <path d="M759 448L774 489L815 504L774 519L759 560L744 519L703 504L744 489L759 448Z" fill="#66E3C4"/>
+  <circle cx="354" cy="385" r="32" fill="#F2A65A"/>
+  <circle cx="325" cy="511" r="32" fill="#FF7AA2"/>
+  <circle cx="375" cy="633" r="32" fill="#A78BFA"/>
+</svg>

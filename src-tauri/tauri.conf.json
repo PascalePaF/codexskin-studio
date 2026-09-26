@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CodexSkin Studio",
+  "version": "1.1.0",
+  "identifier": "com.codexskin.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "CodexSkin Studio",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 980,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "为 ChatGPT 桌面端安全地设计、应用和恢复主题",
+    "longDescription": "CodexSkin Studio 是本地优先的 ChatGPT 桌面主题工具，支持预览、导入导出、备份与精确恢复。",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
