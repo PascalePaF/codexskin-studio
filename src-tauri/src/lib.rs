@@ -1,3 +1,5 @@
+mod background;
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -747,6 +749,55 @@ fn reveal_config() -> Result<(), String> {
         .map_err(|error| format!("无法打开配置位置：{error}"))
 }
 
+#[tauri::command]
+fn get_background_state(app: AppHandle) -> Result<background::BackgroundState, String> {
+    let paths = storage_paths(&app)?;
+    background::get_state(&paths.root)
+}
+
+#[tauri::command]
+fn save_background_image(
+    app: AppHandle,
+    file_name: String,
+    data_url: String,
+) -> Result<background::BackgroundState, String> {
+    let paths = storage_paths(&app)?;
+    background::save_image(&paths.root, &file_name, &data_url)
+}
+
+#[tauri::command]
+fn update_background_settings(
+    app: AppHandle,
+    settings: background::WallpaperSettings,
+) -> Result<background::BackgroundState, String> {
+    let paths = storage_paths(&app)?;
+    background::update_settings(&paths.root, settings)
+}
+
+#[tauri::command]
+fn apply_background(
+    app: AppHandle,
+    restart: bool,
+    surface: String,
+    ink: String,
+    accent: String,
+) -> Result<background::BackgroundApplyResult, String> {
+    let paths = storage_paths(&app)?;
+    background::apply(&paths.root, restart, &surface, &ink, &accent)
+}
+
+#[tauri::command]
+fn restore_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+    let paths = storage_paths(&app)?;
+    background::restore_session(&paths.root)
+}
+
+#[tauri::command]
+fn clear_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+    let paths = storage_paths(&app)?;
+    background::clear(&paths.root)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -758,7 +809,13 @@ pub fn run() {
             undo_last,
             restore_original,
             open_chatgpt,
-            reveal_config
+            reveal_config,
+            get_background_state,
+            save_background_image,
+            update_background_settings,
+            apply_background,
+            restore_background,
+            clear_background
         ])
         .run(tauri::generate_context!())
         .expect("failed to run CodexSkin Studio");

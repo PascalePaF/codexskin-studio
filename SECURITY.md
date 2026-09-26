@@ -13,3 +13,5 @@
 ## Project boundaries
 
 CodexSkin Studio 不需要 ChatGPT 凭据，不读取聊天记录，也不执行主题中的代码。它会在用户明确点击应用后修改 `$CODEX_HOME/config.toml` 的声明外观键，因此配置完整性、备份和恢复问题均视为安全相关问题。
+
+图片背景功能只接受 PNG、JPEG、WebP 和有限数值，不接受 CSS、JavaScript、HTML、远程 URL 或任意文件路径。它仅连接程序自己启动、绑定在 `127.0.0.1` 的会话级调试端口，不安装服务，不修改 ChatGPT 安装包、代码签名或快捷方式。任何绕过回环地址限制、图片验证或重启确认的问题都应作为安全漏洞私下报告。

@@ -6,22 +6,22 @@
 
 ChatGPT 桌面端已经提供原生外观能力：浅色/深色/跟随系统、强调色、背景色、前景色、UI 与代码字体、主题复制/导入。市场同时存在大量通过 CDP 或 CSS 运行时注入实现图片背景、布局和图标改造的项目。
 
-因此，新项目最有价值的切入点不是再造一个高风险注入器，而是：
+因此，产品应先用官方能力承载颜色与字体，再把图片背景放进可识别、可撤销的实验层：
 
 1. 把官方主题能力做成更好用的可视化主题工坊；
 2. 让 Windows 用户真正做到一键应用、清楚知道改了什么、随时精确撤销；
 3. 用对比度检查解决“好看但看不清”的普遍问题；
 4. 同时输出可分享的官方 `codex-theme-v1:` 字符串，避免把用户锁进私有格式；
-5. 图片/视频背景、布局重排和图标替换放入后续明确标注风险的实验通道。
+5. 图片背景使用仅限回环地址的会话级增强通道；不开放第三方脚本，不修改官方安装文件。
 
 ## 官方能力与边界
 
 - [OpenAI Docs：ChatGPT 桌面端 Settings](https://learn.chatgpt.com/docs/reference/settings) 明确列出基础主题、强调色、背景/前景色、UI/代码字体，以及主题分享能力。
 - [OpenAI Docs：配置文件](https://learn.chatgpt.com/docs/config-file/config-advanced) 说明本地状态位于 `$CODEX_HOME`（默认 `~/.codex`），用户配置为 `config.toml`。
 - [OpenAI Docs：桌面命令与深链](https://learn.chatgpt.com/docs/reference/commands) 说明桌面应用保留 `codex://` 深链。
-- 官方公开文档没有承诺 CSS/DOM 注入接口，也没有把任意图片背景描述为稳定主题能力。因此 V1 不注入脚本，不修改安装包。
+- 官方公开文档没有承诺 CSS/DOM 注入接口，也没有把任意图片背景描述为稳定主题能力。因此图片背景必须标为实验功能；稳定的颜色主题仍以官方格式为准，任何版本都不修改安装包。
 
-本机核验（本次开发环境）：Windows 商店包 `OpenAI.Codex 26.924.1866.0`，进程名为 `ChatGPT.exe`；当前 `$CODEX_HOME/config.toml` 已存在 `[desktop].appearanceTheme` 和浅/深代码主题键。安装包内部的主题动作 schema 同时识别浅/深 Chrome 主题、0–100 对比度、字体与语义色。
+本机核验（本次开发环境）：Windows 商店包 `OpenAI.Codex 26.924.2738.0`，进程名为 `ChatGPT.exe`；当前 `$CODEX_HOME/config.toml` 已存在 `[desktop].appearanceTheme` 和浅/深代码主题键。安装包内部的主题动作 schema 同时识别浅/深 Chrome 主题、0–100 对比度、字体与语义色。
 
 ## GitHub 与开源项目
 
@@ -32,6 +32,7 @@ ChatGPT 桌面端已经提供原生外观能力：浅色/深色/跟随系统、�
 | [OpenChatGPTSkin](https://github.com/u2bo/OpenChatGPTSkin) | 主题数据契约 + Runtime | “主题是数据而非任意代码”、校验与恢复；MIT | 能力强但系统复杂，兼容成本高 |
 | [CC Theme](https://github.com/quanzhankeji/cc-theme) | 版本化 `.cctheme` + Adapter | 包校验、摘要、离线回退；MIT | 当前公开支持偏 macOS，Windows 路线暂停 |
 | [HeiGe Codex Skin Studio](https://github.com/jonyhunter/codex-dream-skin) | 回环 CDP 注入，图片取色与主题中心 | 一张图成主题、即时切换、恢复入口；MIT | 调试端口与 DOM 适配风险；素材授权需单独处理 |
+| [CodeFace](https://github.com/sundy-li/CodeFace) | 跨平台回环 CDP 图片背景 | 不修改应用包、PNG/JPEG/WebP、本机会话应用；MIT | 依赖调试启动参数与页面选择器，客户端升级后需回归验证 |
 | [Paletide](https://paletide.haoyunqiankun.com/) | macOS 视觉设计器 | 图层化编辑、本机处理图片、设计师体验 | Windows 仍是明显空位 |
 | [GPTskins](https://github.com/dboyza/GPTskins) | 浏览器扩展 | 用户熟悉的编辑器主题、低门槛主题选择 | 主要覆盖 Web，而不是当前桌面客户端 |
 
@@ -102,9 +103,10 @@ V1 采用 Tauri 2 + React + Rust：前端负责主题设计和预览；Rust 只�
 ## 后续路线
 
 - 1.1（已实现）：主题成对管理（浅/深自动切换）、收藏与最近使用、系统字体检测
-- 1.2：安全主题包（JSON + 摘要 + 预览，不含执行代码）与社区静态目录
-- 1.3：从图片本地取色，但只生成官方颜色主题
-- 2.0 Experimental：隔离的壁纸/布局增强 Adapter；按客户端版本门控、显式风险提示、启动健康检查与自动回退
+- 1.2（已实现）：本机图片背景、玻璃面板参数、回环 CDP 健康检查、显式重启确认与一键恢复
+- 1.3：从图片本地取色、安全主题包（JSON + 摘要 + 预览，不含执行代码）
+- 1.4：社区静态主题目录、客户端版本兼容矩阵与诊断导出
+- 2.0 Experimental：版本化 Adapter 与更细粒度布局增强；继续禁止任意第三方脚本
 
 ## 成功指标
 

@@ -13,14 +13,20 @@ import {
   getThemeById,
 } from "./data/themes";
 import {
+  applyBackground,
   applyTheme,
   applyThemePair,
+  clearBackground,
+  getBackgroundState,
   getEnvironment,
   getSystemFonts,
   openChatGpt,
+  restoreBackground,
   restoreOriginal,
   revealConfig,
+  saveBackgroundImage,
   undoLast,
+  updateBackgroundSettings,
 } from "./lib/bridge";
 import {
   colorWithAlpha,
@@ -37,12 +43,20 @@ import {
   savePreferences,
   toggleId,
 } from "./lib/preferences";
+import {
+  DEFAULT_WALLPAPER_SETTINGS,
+  readFileAsDataUrl,
+  sanitizeWallpaperSettings,
+  validateWallpaperFile,
+} from "./lib/wallpaper";
 import type {
   AppPage,
+  BackgroundState,
   EnvironmentInfo,
   SkinTheme,
   SystemFont,
   ThemePair,
+  WallpaperSettings,
 } from "./types";
 
 type Toast = { id: number; kind: "success" | "error" | "info"; message: string };
@@ -51,6 +65,7 @@ type ThemeFilter = "all" | "dark" | "light" | "favorites";
 const NAV_ITEMS: Array<{ id: AppPage; label: string; hint: string; icon: IconName }> = [
   { id: "themes", label: "主题库", hint: "8 套 · 4 组昼夜", icon: "palette" },
   { id: "studio", label: "主题工坊", hint: "预览与自定义", icon: "sliders" },
+  { id: "background", label: "图片背景", hint: "壁纸与玻璃效果", icon: "image" },
   { id: "recovery", label: "备份与恢复", hint: "撤销每次改动", icon: "shield" },
   { id: "research", label: "调研结论", hint: "证据与路线图", icon: "info" },
 ];
@@ -66,6 +81,22 @@ const INITIAL_ENVIRONMENT: EnvironmentInfo = {
   managedDark: false,
   hasOriginalSnapshot: false,
   hasUndoSnapshot: false,
+};
+
+const INITIAL_BACKGROUND: BackgroundState = {
+  settings: { ...DEFAULT_WALLPAPER_SETTINGS },
+  configured: false,
+  active: false,
+  endpointReady: false,
+  appRunning: false,
+  needsRestart: false,
+  port: null,
+  fileName: null,
+  mime: null,
+  width: null,
+  height: null,
+  imageDataUrl: null,
+  experimental: true,
 };
 
 function cloneTheme(theme: SkinTheme): SkinTheme {
@@ -94,6 +125,9 @@ function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
   const [fontsLoading, setFontsLoading] = useState(true);
+  const [background, setBackground] = useState<BackgroundState>(INITIAL_BACKGROUND);
+  const [backgroundLoading, setBackgroundLoading] = useState(true);
+  const [backgroundRestartOpen, setBackgroundRestartOpen] = useState(false);
 
   const refreshEnvironment = async () => {
     setEnvironmentLoading(true);
@@ -119,9 +153,23 @@ function App() {
     }
   };
 
+  const refreshBackground = async (notify = false) => {
+    setBackgroundLoading(true);
+    try {
+      const state = await getBackgroundState();
+      setBackground(state);
+      if (notify) pushToast("success", "背景状态已刷新");
+    } catch (error) {
+      pushToast("error", `背景检测失败：${errorMessage(error)}`);
+    } finally {
+      setBackgroundLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refreshEnvironment();
     void refreshFonts();
+    void refreshBackground();
   }, []);
 
   useEffect(() => {
@@ -252,6 +300,96 @@ function App() {
     }
   };
 
+  const selectBackgroundFile = async (file: File) => {
+    try {
+      validateWallpaperFile(file);
+      setBusy("background-upload");
+      const dataUrl = await readFileAsDataUrl(file);
+      const state = await saveBackgroundImage(file.name, dataUrl);
+      setBackground(state);
+      pushToast(
+        "success",
+        environment.isDemo
+          ? "图片已载入预览；桌面安装版会把副本安全保存在本机"
+          : `已载入「${state.fileName}」，确认效果后再应用`,
+      );
+    } catch (error) {
+      pushToast("error", `图片载入失败：${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const changeBackgroundSettings = (settings: WallpaperSettings) => {
+    setBackground((current) => ({
+      ...current,
+      settings: sanitizeWallpaperSettings(settings),
+    }));
+  };
+
+  const runBackgroundApply = async (restart: boolean) => {
+    if (!background.configured) {
+      pushToast("info", "请先选择一张本机图片");
+      return;
+    }
+    try {
+      setBusy("background-apply");
+      const saved = await updateBackgroundSettings(background.settings);
+      setBackground(saved);
+      let officialThemeWritten = false;
+      if (restart || (!saved.appRunning && !saved.endpointReady)) {
+        await applyTheme(selectedTheme, false);
+        officialThemeWritten = true;
+      }
+      const result = await applyBackground(restart, selectedTheme);
+      if (!officialThemeWritten) await applyTheme(selectedTheme, false);
+      const state = await getBackgroundState();
+      setBackground(state);
+      setBackgroundRestartOpen(false);
+      pushToast(
+        "success",
+        environment.isDemo
+          ? "图片背景与主题色已在演示预览中应用"
+          : `背景已应用到 ${result.targets} 个 ChatGPT 窗口；关闭桌面端后会自动失效`,
+      );
+      await refreshEnvironment();
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message.startsWith("RESTART_REQUIRED:")) {
+        setBackgroundRestartOpen(true);
+      } else {
+        pushToast("error", `背景应用失败：${message}`);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runBackgroundRestore = async () => {
+    try {
+      setBusy("background-restore");
+      setBackground(await restoreBackground());
+      pushToast("success", "已移除当前会话的图片背景；保存的图片和参数仍在");
+    } catch (error) {
+      pushToast("error", `恢复失败：${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runBackgroundClear = async () => {
+    if (!window.confirm("移除当前背景，并删除 CodexSkin 保存的本机图片副本？原始图片不会受影响。")) return;
+    try {
+      setBusy("background-clear");
+      setBackground(await clearBackground());
+      pushToast("success", "已清除背景设置和 CodexSkin 保存的图片副本");
+    } catch (error) {
+      pushToast("error", `清除失败：${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const runRecovery = async (mode: "undo" | "original") => {
     try {
       setBusy(mode);
@@ -310,6 +448,22 @@ function App() {
             onRefreshFonts={() => void refreshFonts(true)}
           />
         );
+      case "background":
+        return (
+          <BackgroundPage
+            state={background}
+            loading={backgroundLoading}
+            theme={selectedTheme}
+            busy={busy}
+            onFile={(file) => void selectBackgroundFile(file)}
+            onSettingsChange={changeBackgroundSettings}
+            onApply={() => void runBackgroundApply(false)}
+            onRestore={() => void runBackgroundRestore()}
+            onClear={() => void runBackgroundClear()}
+            onRefresh={() => void refreshBackground(true)}
+            onOpenStudio={() => setPage("studio")}
+          />
+        );
       case "recovery":
         return (
           <RecoveryPage
@@ -339,7 +493,7 @@ function App() {
           </div>
           <div>
             <strong>CodexSkin</strong>
-            <small>STUDIO · 1.1.0</small>
+            <small>STUDIO · 1.2.0</small>
           </div>
         </div>
 
@@ -366,7 +520,7 @@ function App() {
           <div className="local-first-icon"><Icon name="shield" size={16} /></div>
           <div>
             <strong>LOCAL FIRST</strong>
-            <p>不登录 · 不上传 · 不注入</p>
+            <p>不登录 · 不上传 · 仅本机增强</p>
           </div>
         </div>
 
@@ -411,6 +565,14 @@ function App() {
             setPage("studio");
             pushToast("success", "主题已安全解析并载入工坊，尚未写入 ChatGPT");
           }}
+        />
+      )}
+
+      {backgroundRestartOpen && (
+        <BackgroundRestartDialog
+          busy={busy === "background-apply"}
+          onClose={() => setBackgroundRestartOpen(false)}
+          onConfirm={() => void runBackgroundApply(true)}
         />
       )}
 
@@ -961,6 +1123,227 @@ function StudioPage({
   );
 }
 
+interface BackgroundPageProps {
+  state: BackgroundState;
+  loading: boolean;
+  theme: SkinTheme;
+  busy: string | null;
+  onFile: (file: File) => void;
+  onSettingsChange: (settings: WallpaperSettings) => void;
+  onApply: () => void;
+  onRestore: () => void;
+  onClear: () => void;
+  onRefresh: () => void;
+  onOpenStudio: () => void;
+}
+
+function BackgroundPage({
+  state,
+  loading,
+  theme,
+  busy,
+  onFile,
+  onSettingsChange,
+  onApply,
+  onRestore,
+  onClear,
+  onRefresh,
+  onOpenStudio,
+}: BackgroundPageProps) {
+  const settings = state.settings;
+  const update = <K extends keyof WallpaperSettings>(key: K, value: WallpaperSettings[K]) => {
+    onSettingsChange({ ...settings, [key]: value });
+  };
+  const applying = busy === "background-apply";
+  const uploading = busy === "background-upload";
+  const status = state.active
+    ? { label: "正在生效", tone: "active" }
+    : state.needsRestart
+      ? { label: "需要重开一次", tone: "warn" }
+      : state.configured
+        ? { label: "等待应用", tone: "ready" }
+        : { label: "尚未选图", tone: "idle" };
+
+  return (
+    <section className="page background-page">
+      <div className="page-title-row">
+        <div>
+          <div className="eyebrow"><span /> WALLPAPER LAB · EXPERIMENTAL</div>
+          <h1>图片背景</h1>
+          <p>把本机图片、主题颜色和玻璃层组合成一套皮肤。图片留在设备上，关闭 ChatGPT 后增强层自动失效。</p>
+        </div>
+        <div className="page-title-actions">
+          <button className="secondary-button" onClick={onOpenStudio} type="button"><Icon name="palette" size={16} />调整主题颜色</button>
+          <button className="secondary-button square" onClick={onRefresh} disabled={loading} title="刷新状态" type="button">
+            {loading ? <span className="spinner dark" /> : <Icon name="refresh" size={16} />}
+          </button>
+        </div>
+      </div>
+
+      <div className="background-layout">
+        <div className="background-preview-column">
+          <div className="preview-label-row">
+            <div><span className={state.active ? "pulse-dot" : "status-dot"} />实时合成预览</div>
+            <div className={`background-status ${status.tone}`}>{status.label}</div>
+          </div>
+          <ThemePreview theme={theme} wallpaper={state} />
+
+          <div className="background-facts">
+            <div>
+              <span>图片</span>
+              <strong>{state.fileName ?? "未选择"}</strong>
+            </div>
+            <div>
+              <span>尺寸</span>
+              <strong>{state.width && state.height ? `${state.width} × ${state.height}` : "—"}</strong>
+            </div>
+            <div>
+              <span>作用范围</span>
+              <strong>{settings.scope === "main" ? "仅内容区" : "整个窗口"}</strong>
+            </div>
+            <div>
+              <span>运行方式</span>
+              <strong>{state.active ? `本机端口 ${state.port}` : "会话级"}</strong>
+            </div>
+          </div>
+
+          <div className="background-safety-note">
+            <span className="background-safety-icon"><Icon name="shield" size={18} /></span>
+            <div>
+              <strong>本机增强，不修改 ChatGPT 安装文件</strong>
+              <p>只连接 <code>127.0.0.1</code>；不读取聊天、不上传图片、不接收自定义 CSS 或脚本。客户端更新后若页面结构变化，可一键恢复。</p>
+            </div>
+            <span className="experimental-pill">实验功能</span>
+          </div>
+        </div>
+
+        <aside className="control-panel background-controls">
+          <div className="control-panel-header">
+            <div><span>BACKGROUND</span><h2>{state.fileName ?? "选择一张背景图"}</h2></div>
+            <span className={`health-pill ${state.active ? "healthy" : ""}`}>
+              {state.active ? "LIVE" : "LOCAL"}
+            </span>
+          </div>
+
+          <div className="control-section">
+            <div className="control-section-title"><span>本机图片</span><small>01</small></div>
+            <label className={`wallpaper-picker ${state.configured ? "configured" : ""}`}>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={uploading}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) onFile(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <span className="wallpaper-picker-icon">
+                {uploading ? <span className="spinner dark" /> : <Icon name="image" size={20} />}
+              </span>
+              <span>
+                <strong>{state.configured ? "更换图片" : "选择背景图片"}</strong>
+                <small>PNG · JPEG · WebP · 最大 8 MiB</small>
+              </span>
+              <Icon name="upload" size={15} />
+            </label>
+          </div>
+
+          <div className="control-section">
+            <div className="control-section-title"><span>画面</span><small>02</small></div>
+            <label className="restart-toggle wallpaper-enabled">
+              <input type="checkbox" checked={settings.enabled} onChange={(event) => update("enabled", event.target.checked)} />
+              <span className="toggle-track"><i /></span>
+              <span><strong>显示图片背景</strong><small>关闭后保留图片和全部参数</small></span>
+            </label>
+            <WallpaperRange label="图片强度" value={settings.opacity} min={10} max={100} unit="%" onChange={(value) => update("opacity", value)} />
+            <WallpaperRange label="暗色遮罩" value={settings.darkness} min={0} max={85} unit="%" onChange={(value) => update("darkness", value)} />
+            <WallpaperRange label="背景模糊" value={settings.blur} min={0} max={24} unit=" px" onChange={(value) => update("blur", value)} />
+            <WallpaperRange label="面板不透明度" value={settings.panelOpacity} min={35} max={100} unit="%" onChange={(value) => update("panelOpacity", value)} />
+          </div>
+
+          <div className="control-section">
+            <div className="control-section-title"><span>构图</span><small>03</small></div>
+            <div className="mode-control wallpaper-mode">
+              <span>适配</span>
+              <div className="segmented grow">
+                <button type="button" className={settings.fit === "cover" ? "active" : ""} onClick={() => update("fit", "cover")}>铺满</button>
+                <button type="button" className={settings.fit === "contain" ? "active" : ""} onClick={() => update("fit", "contain")}>完整显示</button>
+              </div>
+            </div>
+            <WallpaperRange label="缩放" value={settings.zoom} min={100} max={160} unit="%" disabled={settings.fit === "contain"} onChange={(value) => update("zoom", value)} />
+            <div className="position-grid">
+              <WallpaperRange label="水平焦点" value={settings.positionX} min={0} max={100} unit="%" onChange={(value) => update("positionX", value)} />
+              <WallpaperRange label="垂直焦点" value={settings.positionY} min={0} max={100} unit="%" onChange={(value) => update("positionY", value)} />
+            </div>
+            <div className="mode-control wallpaper-mode scope-mode">
+              <span>范围</span>
+              <div className="segmented grow">
+                <button type="button" className={settings.scope === "main" ? "active" : ""} onClick={() => update("scope", "main")}>仅内容区</button>
+                <button type="button" className={settings.scope === "all" ? "active" : ""} onClick={() => update("scope", "all")}>整个窗口</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="control-section theme-link-card">
+            <div>
+              <span>搭配主题</span>
+              <strong>{theme.name}</strong>
+              <small>{theme.variant === "dark" ? "深色" : "浅色"} · 应用时同步颜色</small>
+            </div>
+            <div className="background-palette" aria-label="当前主题色">
+              {[theme.surface, theme.ink, theme.accent].map((color) => <i key={color} style={{ background: color }} />)}
+            </div>
+          </div>
+
+          <div className="background-action-area">
+            <button className="primary-button apply-large" onClick={onApply} disabled={!state.configured || applying} type="button">
+              {applying ? <span className="spinner" /> : <Icon name="sparkles" size={18} />}
+              {state.active ? "重新应用效果" : "应用图片与主题色"}
+            </button>
+            <div className="background-secondary-actions">
+              <button type="button" onClick={onRestore} disabled={!state.active || busy === "background-restore"}>
+                <Icon name="undo" size={14} />移除当前效果
+              </button>
+              <button type="button" onClick={onClear} disabled={!state.configured || busy === "background-clear"}>
+                <Icon name="trash" size={14} />清除图片
+              </button>
+            </div>
+            <p className="apply-footnote"><Icon name="info" size={13} /> 首次启用需要重开一次 ChatGPT，操作前会再次确认</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function WallpaperRange({
+  label,
+  value,
+  min,
+  max,
+  unit,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  unit: string;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  const percentage = ((value - min) / (max - min)) * 100;
+  return (
+    <label className={`range-control wallpaper-range ${disabled ? "disabled" : ""}`}>
+      <span><span>{label}</span><strong>{value}{unit}</strong></span>
+      <input type="range" min={min} max={max} value={value} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} />
+      <i style={{ width: `${percentage}%` }} />
+    </label>
+  );
+}
+
 function ColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="color-control">
@@ -986,7 +1369,19 @@ function ContrastBadge({ theme }: { theme: SkinTheme }) {
   );
 }
 
-function ThemePreview({ theme, compact = false }: { theme: SkinTheme; compact?: boolean }) {
+function ThemePreview({
+  theme,
+  compact = false,
+  wallpaper,
+}: {
+  theme: SkinTheme;
+  compact?: boolean;
+  wallpaper?: BackgroundState;
+}) {
+  const hasWallpaper = Boolean(
+    wallpaper?.configured && wallpaper.imageDataUrl && wallpaper.settings.enabled,
+  );
+  const wallpaperSettings = wallpaper?.settings ?? DEFAULT_WALLPAPER_SETTINGS;
   const variables = {
     "--preview-surface": theme.surface,
     "--preview-ink": theme.ink,
@@ -1000,10 +1395,29 @@ function ThemePreview({ theme, compact = false }: { theme: SkinTheme; compact?: 
     "--preview-skill": theme.skill,
     "--preview-ui-font": theme.fontUi || "system-ui",
     "--preview-code-font": theme.fontCode || "ui-monospace",
+    "--preview-wallpaper-image": wallpaper?.imageDataUrl ? `url("${wallpaper.imageDataUrl}")` : "none",
+    "--preview-wallpaper-opacity": wallpaperSettings.opacity / 100,
+    "--preview-wallpaper-mask": colorWithAlpha("#000000", wallpaperSettings.darkness / 100),
+    "--preview-wallpaper-blur": `${wallpaperSettings.blur}px`,
+    "--preview-wallpaper-size": wallpaperSettings.fit === "contain" ? "contain" : `${wallpaperSettings.zoom}%`,
+    "--preview-wallpaper-position": `${wallpaperSettings.positionX}% ${wallpaperSettings.positionY}%`,
+    "--preview-main-glass": colorWithAlpha(theme.surface, wallpaperSettings.panelOpacity / 100),
+    "--preview-sidebar-glass": colorWithAlpha(
+      theme.surface,
+      wallpaperSettings.scope === "all" ? wallpaperSettings.panelOpacity / 100 : 0.97,
+    ),
   } as CSSProperties;
 
+  const previewClass = [
+    "theme-preview",
+    compact ? "compact" : "",
+    hasWallpaper ? "has-wallpaper" : "",
+    wallpaperSettings.scope === "all" ? "wallpaper-all" : "wallpaper-main",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className={compact ? "theme-preview compact" : "theme-preview"} style={variables}>
+    <div className={previewClass} style={variables}>
+      {hasWallpaper && <div className="mock-wallpaper-layer" aria-hidden="true" />}
       <div className="mock-titlebar">
         <div className="window-dots"><i /><i /><i /></div>
         <span>ChatGPT · Codex</span>
@@ -1151,9 +1565,9 @@ function RecoveryPage({
 
 function ResearchPage() {
   const findings = [
-    { number: "01", title: "官方能力已经足够做稳定 V1", text: "当前桌面端原生支持背景、前景、强调色、字体、主题复制与导入。首版不需要碰安装包。", tone: "blue" },
-    { number: "02", title: "用户真正痛的是可读性与恢复", text: "社区反复抱怨纯黑刺眼、脚本更新后失效、不会恢复；这比“再多几张壁纸”更值得优先解决。", tone: "pink" },
-    { number: "03", title: "Windows 安全主题工坊仍有空位", text: "强视觉项目多依赖 CDP 且偏 macOS。Windows 优先、官方格式、键级恢复形成清晰差异化。", tone: "green" },
+    { number: "01", title: "官方稳定层负责颜色，不负责图片", text: "桌面端原生支持背景色、前景色、强调色与字体，但没有公开任意图片背景字段。两层能力必须明确分开。", tone: "blue" },
+    { number: "02", title: "社区已验证回环 CDP 路线", text: "CodeFace 等开源项目证明无需修改 app.asar 也能做会话级图片背景；关键是限制地址、输入和恢复范围。", tone: "pink" },
+    { number: "03", title: "一键、可读、可恢复才是完整产品", text: "Windows 用户需要安装即用、实时预览、明确重启提示和一键回退，而不只是又一段随版本失效的 CSS。", tone: "green" },
   ];
 
   const sources = [
@@ -1161,15 +1575,15 @@ function ResearchPage() {
     ["GitHub", "agent-paint · 官方字符串生成", "github.com/jzlosman/agent-paint"],
     ["GitHub", "ReTheme · Tauri 兼容层", "github.com/duxweb/ReTheme"],
     ["GitHub", "OpenChatGPTSkin · 数据契约", "github.com/u2bo/OpenChatGPTSkin"],
+    ["GitHub", "CodeFace · 回环图片背景", "github.com/sundy-li/CodeFace"],
     ["Reddit", "暗色过黑与脚本失效反馈", "reddit.com/r/ChatGPT/comments/1t0w3or"],
-    ["X", "开发者个性化与生产力信号", "x.com/TFWNicholson/status/2103415720625496365"],
   ];
 
   return (
     <section className="page research-page">
       <div className="research-hero">
         <div className="eyebrow"><span /> RESEARCH SNAPSHOT · 2026.09.26</div>
-        <h1>不是再造一个注入器，<br /><em>而是把安全换肤做完整。</em></h1>
+        <h1>稳定颜色打底，<br /><em>实验背景也能安全撤销。</em></h1>
         <p>基于 OpenAI 官方资料、GitHub 项目、开发者社区、Reddit、X 与中文生态的产品判断。</p>
       </div>
 
@@ -1194,7 +1608,7 @@ function ResearchPage() {
               ["担心客户端更新后主题失效", "高"],
               ["需要可靠备份和看得懂的恢复入口", "高"],
               ["希望主题可以复制、分享和跨端迁移", "中"],
-              ["希望图片背景、图标、布局深度定制", "后续"],
+              ["希望图片背景与玻璃面板深度定制", "高"],
             ].map(([need, priority], index) => (
               <li key={need}><span>{String(index + 1).padStart(2, "0")}</span><strong>{need}</strong><i>{priority}</i></li>
             ))}
@@ -1214,6 +1628,42 @@ function ResearchPage() {
         </div>
       </div>
     </section>
+  );
+}
+
+function BackgroundRestartDialog({
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <div className="import-dialog restart-dialog" role="dialog" aria-modal="true" aria-labelledby="background-restart-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="dialog-heading">
+          <div className="dialog-icon warning"><Icon name="refresh" size={21} /></div>
+          <div><span>ONE-TIME RESTART</span><h2 id="background-restart-title">需要重开一次 ChatGPT</h2></div>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="关闭"><Icon name="close" /></button>
+        </div>
+        <p>为了让图片背景只通过本机安全通道生效，ChatGPT 需要以增强模式重新打开。<strong>当前窗口和正在运行的任务会被关闭</strong>，但聊天记录不会被删除。</p>
+        <div className="restart-checklist">
+          <div><span>1</span><p><strong>先保存工作</strong><small>等待正在运行的回复或任务结束。</small></p></div>
+          <div><span>2</span><p><strong>自动重开</strong><small>仅增加 127.0.0.1 本机调试端口。</small></p></div>
+          <div><span>3</span><p><strong>随时恢复</strong><small>关闭应用或点击移除效果即可失效。</small></p></div>
+        </div>
+        <div className="dialog-safety"><Icon name="shield" size={14} />不会修改 ChatGPT 安装包、签名、快捷方式或聊天数据</div>
+        <div className="dialog-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>稍后再说</button>
+          <button className="primary-button" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? <span className="spinner" /> : <Icon name="refresh" size={16} />}
+            我已保存，重开并应用
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

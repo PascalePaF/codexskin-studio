@@ -1,11 +1,24 @@
-# CodexSkin Studio 1.1.0
+# CodexSkin Studio 1.2.0
 
 [![Windows CI](https://github.com/PascalePaF/codexskin-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/PascalePaF/codexskin-studio/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-6e8cff.svg)](LICENSE)
 
-一个 Windows 优先、跨平台架构、本地优先的 ChatGPT 桌面主题工具。它使用 ChatGPT 桌面端已有的外观能力，不修改官方安装包、`app.asar`、签名文件、账号信息或聊天数据。
+一个 Windows 优先、本地优先的 ChatGPT 桌面皮肤工具。它把官方颜色主题与可选的会话级图片背景组合在一个可视化工作台里，不修改官方安装包、`app.asar`、签名文件、账号信息或聊天数据。
 
-## 1.1 已完成
+## 下载 Windows 安装版
+
+前往 [GitHub Releases](https://github.com/PascalePaF/codexskin-studio/releases/latest) 下载 `CodexSkin Studio_1.2.0_x64-setup.exe`。当前社区构建没有商业代码签名证书，Windows 首次运行时可能显示“未知发布者”；发布页同时提供 SHA-256，便于校验文件完整性。
+
+## 1.2 已完成
+
+- 选择本机 PNG、JPEG、WebP 作为 ChatGPT 图片背景，最大 8 MiB
+- 实时调整图片强度、暗色遮罩、模糊、缩放、水平/垂直焦点和面板透明度
+- 选择背景只进入主内容区，或延伸到整个窗口
+- 图片真实格式、像素尺寸与文件体积在 Rust 后端重新校验
+- 图片背景通过只绑定 `127.0.0.1` 的会话级增强通道应用，不修改 ChatGPT 安装文件
+- 首次启用若需要重开 ChatGPT，会先显示明确确认；默认不会中断当前任务
+- 一键移除当前效果或彻底清除 CodexSkin 保存的图片副本
+- 独立 Chromium 冒烟测试覆盖载入图片、注入、健康检查、应用状态和清理回退
 
 - 8 套原创浅色/深色主题，支持搜索与筛选
 - 4 组浅色/深色主题组合，可一次应用并跟随系统明暗切换
@@ -28,7 +41,7 @@
 从源码执行 `npm run tauri build` 后，Windows x64 安装器位于：
 
 ```text
-src-tauri/target/release/bundle/nsis/CodexSkin Studio_1.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/CodexSkin Studio_1.2.0_x64-setup.exe
 ```
 
 也可以直接运行 `src-tauri/target/release/codexskin-studio.exe`。构建产物默认不提交到 Git；当前本地构建没有商业代码签名证书，Windows 可能显示“未知发布者”。
@@ -79,11 +92,13 @@ npm run tauri build -- --no-bundle
 
 “一键应用到 ChatGPT”属于本机快速应用 Beta：它使用当前桌面客户端已经读写的外观键，但这些键尚未成为公开的长期配置契约。若未来客户端调整字段，仍可使用“复制官方格式”，在 ChatGPT 的 Settings → Appearance → Import 中导入。
 
+图片背景是明确标注的实验功能。官方文档目前只公开背景**颜色**，没有公开任意图片背景字段。CodexSkin 只接受固定图片类型和有限数值，生成自己的受限样式；HTTP 与 WebSocket 都必须是同一端口上的 `127.0.0.1`。它不会安装常驻服务、修改快捷方式或接受第三方脚本。关闭 ChatGPT 后增强层自动失效；保存的图片副本位于 CodexSkin 自己的应用数据目录。
+
 ## 调研与产品判断
 
 完整调查、竞品矩阵、社区需求、风险与路线图见 [docs/RESEARCH.md](docs/RESEARCH.md)。
 
-1.1.0 的实施计划见 [docs/PLAN-1.1.0.md](docs/PLAN-1.1.0.md)，发布验证、已知边界与 SHA-256 见 [docs/RELEASE-NOTES-1.1.0.md](docs/RELEASE-NOTES-1.1.0.md)。
+1.2.0 的实施计划见 [docs/PLAN-1.2.0.md](docs/PLAN-1.2.0.md)，发布验证、已知边界与 SHA-256 见 [docs/RELEASE-NOTES-1.2.0.md](docs/RELEASE-NOTES-1.2.0.md)。
 
 ## 许可证
 

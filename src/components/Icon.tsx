@@ -22,6 +22,8 @@ export type IconName =
   | "clock"
   | "layers"
   | "type"
+  | "image"
+  | "trash"
   | "close";
 
 interface IconProps extends SVGProps<SVGSVGElement> {
@@ -65,6 +67,8 @@ export function Icon({ name, size = 18, ...props }: IconProps) {
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
     layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></>,
     type: <><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></>,
+    image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/><path d="m14 12-2-2-7 7"/></>,
+    trash: <><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="m6 7 1 14h10l1-14"/><path d="M9 7V4h6v3"/></>,
     close: <><path d="m6 6 12 12"/><path d="m18 6-12 12"/></>,
   };
 

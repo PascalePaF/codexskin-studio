@@ -35,6 +35,47 @@ export interface SystemFont {
   source: string;
 }
 
+export type WallpaperFit = "cover" | "contain";
+export type WallpaperScope = "main" | "all";
+
+export interface WallpaperSettings {
+  enabled: boolean;
+  opacity: number;
+  darkness: number;
+  blur: number;
+  zoom: number;
+  positionX: number;
+  positionY: number;
+  panelOpacity: number;
+  fit: WallpaperFit;
+  scope: WallpaperScope;
+}
+
+export interface BackgroundState {
+  settings: WallpaperSettings;
+  configured: boolean;
+  active: boolean;
+  endpointReady: boolean;
+  appRunning: boolean;
+  needsRestart: boolean;
+  port: number | null;
+  fileName: string | null;
+  mime: string | null;
+  width: number | null;
+  height: number | null;
+  imageDataUrl: string | null;
+  experimental: boolean;
+  isDemo?: boolean;
+}
+
+export interface BackgroundApplyResult {
+  active: boolean;
+  port: number;
+  targets: number;
+  restarted: boolean;
+  sessionOnly: boolean;
+}
+
 export interface EnvironmentInfo {
   platform: string;
   codexHome: string;
@@ -64,4 +105,4 @@ export interface RestoreResult {
   appRunning: boolean;
 }
 
-export type AppPage = "themes" | "studio" | "recovery" | "research";
+export type AppPage = "themes" | "studio" | "background" | "recovery" | "research";
