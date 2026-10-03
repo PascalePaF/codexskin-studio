@@ -7,8 +7,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
@@ -20,6 +20,16 @@ const MANAGED_KEYS: [&str; 5] = [
     "appearanceLightChromeTheme",
     "appearanceDarkChromeTheme",
 ];
+
+pub(crate) fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +96,8 @@ struct SystemFont {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppearanceSnapshot {
+    #[serde(default)]
+    format_version: u8,
     config_existed: bool,
     values: BTreeMap<String, Option<String>>,
 }
@@ -211,14 +223,16 @@ fn capture_snapshot(document: &DocumentMut, config_existed: bool) -> AppearanceS
     let values = MANAGED_KEYS
         .iter()
         .map(|key| {
-            let value = table
-                .and_then(|desktop| desktop.get(key))
-                .and_then(Item::as_value)
-                .map(ToString::to_string);
+            let value = table.and_then(|desktop| desktop.get(key)).map(|item| {
+                let mut saved = DocumentMut::new();
+                saved.insert("saved", item.clone());
+                saved.to_string()
+            });
             ((*key).to_string(), value)
         })
         .collect();
     AppearanceSnapshot {
+        format_version: 2,
         config_existed,
         values,
     }
@@ -253,19 +267,32 @@ fn restore_snapshot(
     document: &mut DocumentMut,
     snapshot: &AppearanceSnapshot,
 ) -> Result<usize, String> {
-    let desktop = desktop_table_mut(document)?;
+    if snapshot.format_version > 2
+        || MANAGED_KEYS
+            .iter()
+            .any(|key| !snapshot.values.contains_key(*key))
+    {
+        return Err("恢复点不完整或版本不受支持；未修改当前配置".to_string());
+    }
+    let mut staged = document.clone();
+    let desktop = desktop_table_mut(&mut staged)?;
     let mut restored = 0;
     for key in MANAGED_KEYS {
         let saved = snapshot.values.get(key).cloned().flatten();
         match saved {
             Some(serialized) => {
-                let item = parse_saved_value(&serialized)?;
-                let changed = desktop
-                    .get(key)
-                    .and_then(Item::as_value)
-                    .map(ToString::to_string)
-                    .as_deref()
-                    != Some(serialized.as_str());
+                let item = if snapshot.format_version == 2 {
+                    serialized
+                        .parse::<DocumentMut>()
+                        .map_err(|error| format!("恢复点中的 TOML 无效：{error}"))?
+                        .get("saved")
+                        .cloned()
+                        .ok_or_else(|| "恢复点缺少 saved 字段".to_string())?
+                } else {
+                    parse_saved_value(&serialized)?
+                };
+                let changed = desktop.get(key).map(ToString::to_string).as_deref()
+                    != Some(item.to_string().as_str());
                 if changed {
                     desktop.insert(key, item);
                     restored += 1;
@@ -278,6 +305,7 @@ fn restore_snapshot(
             }
         }
     }
+    *document = staged;
     Ok(restored)
 }
 
@@ -291,7 +319,11 @@ fn validate_font(value: &str, label: &str) -> Result<(), String> {
     if value.len() > 160 {
         return Err(format!("{label}名称过长"));
     }
-    let lowered = value.to_ascii_lowercase();
+    let lowered: String = value
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
     if lowered.contains("url(")
         || value.contains(['{', '}', ';'])
         || value.chars().any(char::is_control)
@@ -449,7 +481,7 @@ fn discover_platform_fonts() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
         let script = r#"$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $paths = @('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts', 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'); $names = foreach ($path in $paths) { if (Test-Path $path) { (Get-ItemProperty $path).PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object { $_.Name -replace '\s*\([^)]*\)\s*$', '' } } }; ConvertTo-Json -InputObject @($names | Sort-Object -Unique) -Compress"#;
-        if let Ok(output) = Command::new("powershell.exe")
+        if let Ok(output) = hidden_command("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .output()
         {
@@ -526,7 +558,7 @@ fn collect_system_fonts() -> Vec<SystemFont> {
 fn is_chatgpt_running() -> bool {
     #[cfg(target_os = "windows")]
     {
-        Command::new("tasklist")
+        hidden_command("tasklist")
             .args(["/FI", "IMAGENAME eq ChatGPT.exe", "/NH"])
             .output()
             .map(|output| {
@@ -562,24 +594,13 @@ fn launch_chatgpt() -> Result<(), String> {
 
 fn restart_chatgpt() -> Result<(), String> {
     if is_chatgpt_running() {
-        #[cfg(target_os = "windows")]
-        let status = Command::new("taskkill")
-            .args(["/IM", "ChatGPT.exe", "/T", "/F"])
-            .status();
-        #[cfg(not(target_os = "windows"))]
-        let status = Command::new("pkill").args(["-f", "ChatGPT"]).status();
-        status
-            .map_err(|error| format!("无法结束 ChatGPT：{error}"))?
-            .success()
-            .then_some(())
-            .ok_or_else(|| "ChatGPT 未能正常退出；主题已经写入，可稍后手动重开".to_string())?;
-        thread::sleep(Duration::from_millis(900));
+        background::stop_chatgpt()
+            .map_err(|error| format!("主题已保存，但自动重开未完成：{error}"))?;
     }
     launch_chatgpt()
 }
 
-#[tauri::command]
-fn get_environment(app: AppHandle) -> Result<EnvironmentInfo, String> {
+fn get_environment_blocking(app: AppHandle) -> Result<EnvironmentInfo, String> {
     let home = codex_home()?;
     let config_path = home.join("config.toml");
     let config_exists = config_path.exists();
@@ -608,8 +629,11 @@ fn get_environment(app: AppHandle) -> Result<EnvironmentInfo, String> {
     })
 }
 
-#[tauri::command]
-fn apply_theme(app: AppHandle, theme: SkinTheme, restart: bool) -> Result<ApplyResult, String> {
+fn apply_theme_blocking(
+    app: AppHandle,
+    theme: SkinTheme,
+    restart: bool,
+) -> Result<ApplyResult, String> {
     validate_theme(&theme)?;
     let config_path = codex_home()?.join("config.toml");
     let config_existed = config_path.exists();
@@ -638,8 +662,7 @@ fn apply_theme(app: AppHandle, theme: SkinTheme, restart: bool) -> Result<ApplyR
     })
 }
 
-#[tauri::command]
-fn apply_theme_pair(
+fn apply_theme_pair_blocking(
     app: AppHandle,
     light_theme: SkinTheme,
     dark_theme: SkinTheme,
@@ -674,11 +697,6 @@ fn apply_theme_pair(
     })
 }
 
-#[tauri::command]
-fn get_system_fonts() -> Vec<SystemFont> {
-    collect_system_fonts()
-}
-
 fn run_restore(
     app: &AppHandle,
     snapshot_path: &Path,
@@ -702,25 +720,17 @@ fn run_restore(
     })
 }
 
-#[tauri::command]
-fn undo_last(app: AppHandle) -> Result<RestoreResult, String> {
+fn undo_last_blocking(app: AppHandle) -> Result<RestoreResult, String> {
     let paths = storage_paths(&app)?;
     run_restore(&app, &paths.undo, "before-undo")
 }
 
-#[tauri::command]
-fn restore_original(app: AppHandle) -> Result<RestoreResult, String> {
+fn restore_original_blocking(app: AppHandle) -> Result<RestoreResult, String> {
     let paths = storage_paths(&app)?;
     run_restore(&app, &paths.original, "before-original-restore")
 }
 
-#[tauri::command]
-fn open_chatgpt() -> Result<(), String> {
-    launch_chatgpt()
-}
-
-#[tauri::command]
-fn reveal_config() -> Result<(), String> {
+fn reveal_config_blocking() -> Result<(), String> {
     let config_path = codex_home()?.join("config.toml");
     #[cfg(target_os = "windows")]
     let result = if config_path.exists() {
@@ -749,14 +759,12 @@ fn reveal_config() -> Result<(), String> {
         .map_err(|error| format!("无法打开配置位置：{error}"))
 }
 
-#[tauri::command]
-fn get_background_state(app: AppHandle) -> Result<background::BackgroundState, String> {
+fn get_background_state_blocking(app: AppHandle) -> Result<background::BackgroundState, String> {
     let paths = storage_paths(&app)?;
     background::get_state(&paths.root)
 }
 
-#[tauri::command]
-fn save_background_image(
+fn save_background_image_blocking(
     app: AppHandle,
     file_name: String,
     data_url: String,
@@ -765,8 +773,7 @@ fn save_background_image(
     background::save_image(&paths.root, &file_name, &data_url)
 }
 
-#[tauri::command]
-fn update_background_settings(
+fn update_background_settings_blocking(
     app: AppHandle,
     settings: background::WallpaperSettings,
 ) -> Result<background::BackgroundState, String> {
@@ -774,8 +781,7 @@ fn update_background_settings(
     background::update_settings(&paths.root, settings)
 }
 
-#[tauri::command]
-fn apply_background(
+fn apply_background_blocking(
     app: AppHandle,
     restart: bool,
     surface: String,
@@ -786,16 +792,112 @@ fn apply_background(
     background::apply(&paths.root, restart, &surface, &ink, &accent)
 }
 
-#[tauri::command]
-fn restore_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+fn restore_background_blocking(app: AppHandle) -> Result<background::BackgroundState, String> {
     let paths = storage_paths(&app)?;
     background::restore_session(&paths.root)
 }
 
-#[tauri::command]
-fn clear_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+fn clear_background_blocking(app: AppHandle) -> Result<background::BackgroundState, String> {
     let paths = storage_paths(&app)?;
     background::clear(&paths.root)
+}
+
+// Disk and CDP operations never run on the WebView/UI thread. Serializing the
+// data commands also prevents an apply/clear race from invalidating recovery.
+static IO_LOCK: Mutex<()> = Mutex::new(());
+
+async fn blocking<T: Send + 'static>(
+    action: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = IO_LOCK
+            .lock()
+            .map_err(|_| "后台状态异常，请重开 CodexSkin".to_string())?;
+        action()
+    })
+    .await
+    .map_err(|error| format!("后台操作未完成：{error}"))?
+}
+
+#[tauri::command]
+async fn get_environment(app: AppHandle) -> Result<EnvironmentInfo, String> {
+    blocking(move || get_environment_blocking(app)).await
+}
+#[tauri::command]
+async fn apply_theme(
+    app: AppHandle,
+    theme: SkinTheme,
+    restart: bool,
+) -> Result<ApplyResult, String> {
+    blocking(move || apply_theme_blocking(app, theme, restart)).await
+}
+#[tauri::command]
+async fn apply_theme_pair(
+    app: AppHandle,
+    light_theme: SkinTheme,
+    dark_theme: SkinTheme,
+    restart: bool,
+) -> Result<ApplyResult, String> {
+    blocking(move || apply_theme_pair_blocking(app, light_theme, dark_theme, restart)).await
+}
+#[tauri::command]
+async fn get_system_fonts() -> Result<Vec<SystemFont>, String> {
+    tauri::async_runtime::spawn_blocking(collect_system_fonts)
+        .await
+        .map_err(|error| error.to_string())
+}
+#[tauri::command]
+async fn undo_last(app: AppHandle) -> Result<RestoreResult, String> {
+    blocking(move || undo_last_blocking(app)).await
+}
+#[tauri::command]
+async fn restore_original(app: AppHandle) -> Result<RestoreResult, String> {
+    blocking(move || restore_original_blocking(app)).await
+}
+#[tauri::command]
+async fn open_chatgpt() -> Result<(), String> {
+    blocking(launch_chatgpt).await
+}
+#[tauri::command]
+async fn reveal_config() -> Result<(), String> {
+    blocking(reveal_config_blocking).await
+}
+#[tauri::command]
+async fn get_background_state(app: AppHandle) -> Result<background::BackgroundState, String> {
+    blocking(move || get_background_state_blocking(app)).await
+}
+#[tauri::command]
+async fn save_background_image(
+    app: AppHandle,
+    file_name: String,
+    data_url: String,
+) -> Result<background::BackgroundState, String> {
+    blocking(move || save_background_image_blocking(app, file_name, data_url)).await
+}
+#[tauri::command]
+async fn update_background_settings(
+    app: AppHandle,
+    settings: background::WallpaperSettings,
+) -> Result<background::BackgroundState, String> {
+    blocking(move || update_background_settings_blocking(app, settings)).await
+}
+#[tauri::command]
+async fn apply_background(
+    app: AppHandle,
+    restart: bool,
+    surface: String,
+    ink: String,
+    accent: String,
+) -> Result<background::BackgroundApplyResult, String> {
+    blocking(move || apply_background_blocking(app, restart, surface, ink, accent)).await
+}
+#[tauri::command]
+async fn restore_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+    blocking(move || restore_background_blocking(app)).await
+}
+#[tauri::command]
+async fn clear_background(app: AppHandle) -> Result<background::BackgroundState, String> {
+    blocking(move || clear_background_blocking(app)).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -824,6 +926,64 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restores_nested_theme_tables_and_keeps_unrelated_settings() {
+        let mut document: DocumentMut = "[desktop]\nappearanceTheme = 'dark'\nother = true\n[desktop.appearanceDarkChromeTheme]\naccent = '#112233'\n[desktop.appearanceDarkChromeTheme.fonts]\nui = 'Segoe UI'\n".parse().unwrap();
+        let snapshot = capture_snapshot(&document, true);
+        apply_theme_to_document(&mut document, &sample_theme()).unwrap();
+        restore_snapshot(&mut document, &snapshot).unwrap();
+        assert_eq!(
+            document["desktop"]["appearanceDarkChromeTheme"]["accent"].as_str(),
+            Some("#112233")
+        );
+        assert_eq!(
+            document["desktop"]["appearanceDarkChromeTheme"]["fonts"]["ui"].as_str(),
+            Some("Segoe UI")
+        );
+        assert_eq!(document["desktop"]["other"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn rejects_incomplete_snapshot_without_changing_document() {
+        let mut document: DocumentMut = "[desktop]\nappearanceTheme = 'dark'\n".parse().unwrap();
+        let before = document.to_string();
+        let snapshot = AppearanceSnapshot {
+            format_version: 2,
+            config_existed: true,
+            values: BTreeMap::new(),
+        };
+        assert!(restore_snapshot(&mut document, &snapshot).is_err());
+        assert_eq!(document.to_string(), before);
+    }
+
+    #[test]
+    fn accepts_v12_snapshots_and_rejects_bad_values_without_partial_restore() {
+        let mut values: BTreeMap<String, Option<String>> = MANAGED_KEYS
+            .iter()
+            .map(|key| (key.to_string(), None))
+            .collect();
+        values.insert("appearanceTheme".into(), Some("'light'".into()));
+        let snapshot: AppearanceSnapshot =
+            serde_json::from_value(serde_json::json!({"configExisted":true,"values":values}))
+                .unwrap();
+        let mut document: DocumentMut = "[desktop]\nappearanceTheme = 'dark'\nkeep = 123\n"
+            .parse()
+            .unwrap();
+        restore_snapshot(&mut document, &snapshot).unwrap();
+        assert_eq!(
+            document["desktop"]["appearanceTheme"].as_str(),
+            Some("light")
+        );
+        assert_eq!(document["desktop"]["keep"].as_integer(), Some(123));
+        let before = document.to_string();
+        let mut corrupt = capture_snapshot(&document, true);
+        corrupt
+            .values
+            .insert("appearanceDarkChromeTheme".into(), Some("[broken".into()));
+        assert!(restore_snapshot(&mut document, &corrupt).is_err());
+        assert_eq!(document.to_string(), before);
+    }
 
     fn sample_theme() -> SkinTheme {
         SkinTheme {

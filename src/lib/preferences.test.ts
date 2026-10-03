@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { PRESET_THEMES } from "../data/themes";
+import { DEFAULT_WALLPAPER_SETTINGS } from "./wallpaper";
 import {
   DEFAULT_PREFERENCES,
   PREFERENCES_KEY,
@@ -15,6 +17,29 @@ class MemoryStorage {
 }
 
 describe("local preferences", () => {
+  it("retains edited and imported theme values and unapplied wallpaper drafts", () => {
+    const storage = new MemoryStorage();
+    const preferences = {
+      ...DEFAULT_PREFERENCES,
+      selectedTheme: { ...PRESET_THEMES[0], id: "imported-1", accent: "#123456", fontUi: "Arial" },
+      wallpaperDraft: { ...DEFAULT_WALLPAPER_SETTINGS, blur: 12, fit: "contain" as const },
+    };
+    savePreferences(preferences, storage);
+    expect(loadPreferences(storage)).toEqual(preferences);
+  });
+
+  it("drops invalid theme data without losing favorites", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(PREFERENCES_KEY, JSON.stringify({ favoriteThemeIds: ["a"], selectedTheme: { accent: "oops" } }));
+    expect(loadPreferences(storage).selectedTheme).toBeNull();
+    expect(loadPreferences(storage).favoriteThemeIds).toEqual(["a"]);
+  });
+
+  it("tolerates unavailable storage", () => {
+    const storage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("full"); } };
+    expect(loadPreferences(storage)).toEqual(DEFAULT_PREFERENCES);
+    expect(() => savePreferences(DEFAULT_PREFERENCES, storage)).not.toThrow();
+  });
   it("survives malformed persisted data", () => {
     const storage = new MemoryStorage();
     storage.setItem(PREFERENCES_KEY, "{broken");

@@ -66,6 +66,9 @@ export interface BackgroundState {
   imageDataUrl: string | null;
   experimental: boolean;
   isDemo?: boolean;
+  warning?: string | null;
+  hasSession?: boolean;
+  savedSettings?: WallpaperSettings;
 }
 
 export interface BackgroundApplyResult {

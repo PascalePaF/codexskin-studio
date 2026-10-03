@@ -43,7 +43,7 @@ function optionalFont(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length > 160) {
     throw new Error(`${label} 不是有效字体名称`);
   }
-  if (/url\s*\(|[{};]/i.test(value)) {
+  if (/url\s*\(|[{};\x00-\x1f\x7f]/i.test(value)) {
     throw new Error(`${label} 包含不允许的内容`);
   }
   return value.trim();
@@ -172,6 +172,9 @@ export function parseThemeString(input: string): SkinTheme {
 }
 
 export function validateTheme(theme: SkinTheme): void {
+  if (!theme || typeof theme !== "object" || typeof theme.opaqueWindows !== "boolean") {
+    throw new Error("主题数据无效");
+  }
   const colors: Array<[string, string]> = [
     ["accent", theme.accent],
     ["surface", theme.surface],

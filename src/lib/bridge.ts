@@ -132,7 +132,7 @@ async function imageDimensions(dataUrl: string): Promise<{ width: number; height
 }
 
 export async function getBackgroundState(): Promise<BackgroundState> {
-  if (!isDesktopRuntime()) return { ...demoBackground, settings: { ...demoBackground.settings } };
+  if (!isDesktopRuntime()) return { ...demoBackground, settings: { ...demoBackground.settings }, savedSettings: { ...demoBackground.settings } };
   return invoke<BackgroundState>("get_background_state");
 }
 
@@ -173,8 +173,8 @@ export async function applyBackground(
 ): Promise<BackgroundApplyResult> {
   if (!isDesktopRuntime()) {
     await new Promise((resolve) => window.setTimeout(resolve, 520));
-    demoBackground = { ...demoBackground, active: true, endpointReady: true, port: 9341 };
-    return { active: true, port: 9341, targets: 1, restarted: false, sessionOnly: true };
+    demoBackground = { ...demoBackground, active: demoBackground.settings.enabled, endpointReady: true, port: 9341 };
+    return { active: demoBackground.active, port: 9341, targets: demoBackground.active ? 1 : 0, restarted: false, sessionOnly: true };
   }
   return invoke<BackgroundApplyResult>("apply_background", {
     restart,

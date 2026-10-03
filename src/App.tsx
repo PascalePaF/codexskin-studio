@@ -3,6 +3,7 @@ import {
   type FormEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Icon, type IconName } from "./components/Icon";
@@ -115,7 +116,7 @@ function App() {
   const [environment, setEnvironment] = useState<EnvironmentInfo>(INITIAL_ENVIRONMENT);
   const [environmentLoading, setEnvironmentLoading] = useState(true);
   const [selectedTheme, setSelectedTheme] = useState<SkinTheme>(() => cloneTheme(
-    getThemeById(loadPreferences().selectedThemeId ?? "") ?? PRESET_THEMES[0],
+    preferences.selectedTheme ?? getThemeById(preferences.selectedThemeId ?? "") ?? PRESET_THEMES[0],
   ));
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ThemeFilter>("all");
@@ -125,9 +126,26 @@ function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
   const [fontsLoading, setFontsLoading] = useState(true);
-  const [background, setBackground] = useState<BackgroundState>(INITIAL_BACKGROUND);
+  const [background, setBackground] = useState<BackgroundState>(() => ({
+    ...INITIAL_BACKGROUND, settings: preferences.wallpaperDraft ?? INITIAL_BACKGROUND.settings,
+  }));
   const [backgroundLoading, setBackgroundLoading] = useState(true);
   const [backgroundRestartOpen, setBackgroundRestartOpen] = useState(false);
+  const [backgroundClearOpen, setBackgroundClearOpen] = useState(false);
+  const operation = useRef(false);
+  const backgroundLoaded = useRef(false);
+  const backgroundRequest = useRef(0);
+
+  const beginOperation = (name: string) => {
+    if (operation.current || backgroundLoading || environmentLoading) return false;
+    operation.current = true;
+    setBusy(name);
+    return true;
+  };
+  const endOperation = () => {
+    operation.current = false;
+    setBusy(null);
+  };
 
   const refreshEnvironment = async () => {
     setEnvironmentLoading(true);
@@ -154,15 +172,21 @@ function App() {
   };
 
   const refreshBackground = async (notify = false) => {
+    if (operation.current) return;
+    const request = ++backgroundRequest.current;
     setBackgroundLoading(true);
     try {
       const state = await getBackgroundState();
-      setBackground(state);
+      if (request !== backgroundRequest.current) return;
+      const keepDraft = backgroundLoaded.current || Boolean(preferences.wallpaperDraft);
+      setBackground((current) => ({ ...state, settings: keepDraft
+        ? current.settings : state.settings }));
+      backgroundLoaded.current = true;
       if (notify) pushToast("success", "背景状态已刷新");
     } catch (error) {
       pushToast("error", `背景检测失败：${errorMessage(error)}`);
     } finally {
-      setBackgroundLoading(false);
+      if (request === backgroundRequest.current) setBackgroundLoading(false);
     }
   };
 
@@ -173,12 +197,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    savePreferences(preferences);
-  }, [preferences]);
+    savePreferences({ ...preferences, selectedTheme, wallpaperDraft: background.settings });
+  }, [preferences, selectedTheme, background.settings]);
 
   const pushToast = (kind: Toast["kind"], message: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
-    setToasts((current) => [...current, { id, kind, message }]);
+    setToasts((current) => [...current.slice(-1), { id, kind, message }]);
     window.setTimeout(() => {
       setToasts((current) => current.filter((toast) => toast.id !== id));
     }, 4200);
@@ -207,10 +231,11 @@ function App() {
   };
 
   const runApply = async (theme = selectedTheme) => {
+    if (!beginOperation(`apply:${theme.id}`)) return;
     try {
       validateTheme(theme);
-      setBusy(`apply:${theme.id}`);
       const result = await applyTheme(theme, restartAfterApply);
+      setSelectedTheme(cloneTheme(theme));
       const runningNote =
         result.appRunning && !result.restartRequested
           ? "；ChatGPT 正在运行，完全退出并重开后可确保生效"
@@ -232,20 +257,20 @@ function App() {
     } catch (error) {
       pushToast("error", `应用失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
   const previewPair = (pair: ThemePair) => {
     const themes = getPairThemes(pair);
-    const preview = environment.activeMode === "light" ? themes.light : themes.dark;
+    const preview = window.matchMedia("(prefers-color-scheme: light)").matches ? themes.light : themes.dark;
     selectTheme(preview);
   };
 
   const runApplyPair = async (pair: ThemePair) => {
+    if (!beginOperation(`pair:${pair.id}`)) return;
     try {
       const themes = getPairThemes(pair);
-      setBusy(`pair:${pair.id}`);
       const result = await applyThemePair(themes.light, themes.dark, restartAfterApply);
       const runningNote = result.appRunning && !result.restartRequested
         ? "；完全退出并重开 ChatGPT 后可确保生效"
@@ -256,7 +281,7 @@ function App() {
           ? `已模拟应用「${pair.name}」；桌面版会写入浅色和深色槽位`
           : `已应用「${pair.name}」，现在跟随系统明暗模式${runningNote}`,
       );
-      const selectedForCurrentMode = environment.activeMode === "light" ? themes.light : themes.dark;
+      const selectedForCurrentMode = window.matchMedia("(prefers-color-scheme: light)").matches ? themes.light : themes.dark;
       setSelectedTheme(cloneTheme(selectedForCurrentMode));
       setPreferences((current) => ({
         ...current,
@@ -271,7 +296,7 @@ function App() {
     } catch (error) {
       pushToast("error", `组合应用失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
@@ -292,8 +317,10 @@ function App() {
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = `${fileSafeThemeName(selectedTheme)}.txt`;
+      document.body.append(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       pushToast("success", "主题文件已导出");
     } catch (error) {
       pushToast("error", `导出失败：${errorMessage(error)}`);
@@ -301,12 +328,12 @@ function App() {
   };
 
   const selectBackgroundFile = async (file: File) => {
+    if (!beginOperation("background-upload")) return;
     try {
       validateWallpaperFile(file);
-      setBusy("background-upload");
       const dataUrl = await readFileAsDataUrl(file);
       const state = await saveBackgroundImage(file.name, dataUrl);
-      setBackground(state);
+      setBackground((current) => ({ ...state, settings: current.settings }));
       pushToast(
         "success",
         environment.isDemo
@@ -316,7 +343,7 @@ function App() {
     } catch (error) {
       pushToast("error", `图片载入失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
@@ -332,17 +359,12 @@ function App() {
       pushToast("info", "请先选择一张本机图片");
       return;
     }
+    if (!beginOperation("background-apply")) return;
     try {
-      setBusy("background-apply");
+      validateTheme(selectedTheme);
       const saved = await updateBackgroundSettings(background.settings);
       setBackground(saved);
-      let officialThemeWritten = false;
-      if (restart || (!saved.appRunning && !saved.endpointReady)) {
-        await applyTheme(selectedTheme, false);
-        officialThemeWritten = true;
-      }
       const result = await applyBackground(restart, selectedTheme);
-      if (!officialThemeWritten) await applyTheme(selectedTheme, false);
       const state = await getBackgroundState();
       setBackground(state);
       setBackgroundRestartOpen(false);
@@ -350,7 +372,9 @@ function App() {
         "success",
         environment.isDemo
           ? "图片背景与主题色已在演示预览中应用"
-          : `背景已应用到 ${result.targets} 个 ChatGPT 窗口；关闭桌面端后会自动失效`,
+          : result.active
+            ? `背景已应用到 ${result.targets} 个窗口；页面重载或关闭后需重新应用`
+            : "图片背景已停用，图片和参数仍保留",
       );
       await refreshEnvironment();
     } catch (error) {
@@ -361,38 +385,39 @@ function App() {
         pushToast("error", `背景应用失败：${message}`);
       }
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
   const runBackgroundRestore = async () => {
+    if (!beginOperation("background-restore")) return;
     try {
-      setBusy("background-restore");
-      setBackground(await restoreBackground());
+      const state = await restoreBackground();
+      setBackground((current) => ({ ...state, settings: current.settings }));
       pushToast("success", "已移除当前会话的图片背景；保存的图片和参数仍在");
     } catch (error) {
       pushToast("error", `恢复失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
   const runBackgroundClear = async () => {
-    if (!window.confirm("移除当前背景，并删除 CodexSkin 保存的本机图片副本？原始图片不会受影响。")) return;
+    if (!beginOperation("background-clear")) return;
     try {
-      setBusy("background-clear");
       setBackground(await clearBackground());
+      setBackgroundClearOpen(false);
       pushToast("success", "已清除背景设置和 CodexSkin 保存的图片副本");
     } catch (error) {
       pushToast("error", `清除失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
   const runRecovery = async (mode: "undo" | "original") => {
+    if (!beginOperation(mode)) return;
     try {
-      setBusy(mode);
       const result = mode === "undo" ? await undoLast() : await restoreOriginal();
       pushToast(
         "success",
@@ -402,7 +427,7 @@ function App() {
     } catch (error) {
       pushToast("error", `恢复失败：${errorMessage(error)}`);
     } finally {
-      setBusy(null);
+      endOperation();
     }
   };
 
@@ -459,7 +484,7 @@ function App() {
             onSettingsChange={changeBackgroundSettings}
             onApply={() => void runBackgroundApply(false)}
             onRestore={() => void runBackgroundRestore()}
-            onClear={() => void runBackgroundClear()}
+            onClear={() => setBackgroundClearOpen(true)}
             onRefresh={() => void refreshBackground(true)}
             onOpenStudio={() => setPage("studio")}
           />
@@ -493,7 +518,7 @@ function App() {
           </div>
           <div>
             <strong>CodexSkin</strong>
-            <small>STUDIO · 1.2.0</small>
+            <small>STUDIO · 1.3.0</small>
           </div>
         </div>
 
@@ -503,6 +528,8 @@ function App() {
               key={item.id}
               className={page === item.id ? "nav-item active" : "nav-item"}
               onClick={() => setPage(item.id)}
+              aria-label={item.label}
+              title={item.label}
               type="button"
             >
               <span className="nav-icon"><Icon name={item.icon} /></span>
@@ -547,13 +574,13 @@ function App() {
                   ? `配置已连接 · ${environment.activeMode ?? "system"}`
                   : "等待 ChatGPT 配置"}
             </div>
-            <button className="icon-button" title="重新检测" onClick={() => void refreshEnvironment()} type="button">
+            <button className="icon-button" title="重新检测" disabled={Boolean(busy) || environmentLoading} onClick={() => void refreshEnvironment()} type="button">
               <Icon name="refresh" size={17} />
             </button>
           </div>
         </header>
 
-        <div className="page-scroll">{content}</div>
+        <div className="page-scroll"><fieldset className="interaction-lock" disabled={Boolean(busy) || environmentLoading || backgroundLoading} aria-busy={Boolean(busy)}>{content}</fieldset></div>
       </main>
 
       {importOpen && (
@@ -574,6 +601,10 @@ function App() {
           onClose={() => setBackgroundRestartOpen(false)}
           onConfirm={() => void runBackgroundApply(true)}
         />
+      )}
+
+      {backgroundClearOpen && (
+        <ConfirmClearDialog busy={Boolean(busy)} onClose={() => setBackgroundClearOpen(false)} onConfirm={() => void runBackgroundClear()} />
       )}
 
       <div className="toast-stack" aria-live="polite">
@@ -1156,7 +1187,11 @@ function BackgroundPage({
   };
   const applying = busy === "background-apply";
   const uploading = busy === "background-upload";
-  const status = state.active
+  const status = !settings.enabled
+    ? { label: state.active ? "停用尚未应用" : "已停用", tone: "idle" }
+    : state.active && state.savedSettings && JSON.stringify(state.savedSettings) !== JSON.stringify(settings)
+      ? { label: "参数待应用", tone: "warn" }
+    : state.active
     ? { label: "正在生效", tone: "active" }
     : state.needsRestart
       ? { label: "需要重开一次", tone: "warn" }
@@ -1170,7 +1205,7 @@ function BackgroundPage({
         <div>
           <div className="eyebrow"><span /> WALLPAPER LAB · EXPERIMENTAL</div>
           <h1>图片背景</h1>
-          <p>把本机图片、主题颜色和玻璃层组合成一套皮肤。图片留在设备上，关闭 ChatGPT 后增强层自动失效。</p>
+          <p>图片与参数仅保存在本机。调节自动记住，点击应用才改变客户端；页面重载或关闭后需重新应用。</p>
         </div>
         <div className="page-title-actions">
           <button className="secondary-button" onClick={onOpenStudio} type="button"><Icon name="palette" size={16} />调整主题颜色</button>
@@ -1187,6 +1222,7 @@ function BackgroundPage({
             <div className={`background-status ${status.tone}`}>{status.label}</div>
           </div>
           <ThemePreview theme={theme} wallpaper={state} />
+          {state.warning && <p className="background-warning" role="alert">{state.warning}；可重新选图修复或清除。</p>}
 
           <div className="background-facts">
             <div>
@@ -1199,7 +1235,7 @@ function BackgroundPage({
             </div>
             <div>
               <span>作用范围</span>
-              <strong>{settings.scope === "main" ? "仅内容区" : "整个窗口"}</strong>
+              <strong>{settings.scope === "main" ? "仅内容区" : "内容与侧栏"}</strong>
             </div>
             <div>
               <span>运行方式</span>
@@ -1280,7 +1316,7 @@ function BackgroundPage({
               <span>范围</span>
               <div className="segmented grow">
                 <button type="button" className={settings.scope === "main" ? "active" : ""} onClick={() => update("scope", "main")}>仅内容区</button>
-                <button type="button" className={settings.scope === "all" ? "active" : ""} onClick={() => update("scope", "all")}>整个窗口</button>
+                <button type="button" className={settings.scope === "all" ? "active" : ""} onClick={() => update("scope", "all")}>内容与侧栏</button>
               </div>
             </div>
           </div>
@@ -1289,7 +1325,7 @@ function BackgroundPage({
             <div>
               <span>搭配主题</span>
               <strong>{theme.name}</strong>
-              <small>{theme.variant === "dark" ? "深色" : "浅色"} · 应用时同步颜色</small>
+              <small>{theme.variant === "dark" ? "深色" : "浅色"} · 背景层配色；持久主题请到工坊应用</small>
             </div>
             <div className="background-palette" aria-label="当前主题色">
               {[theme.surface, theme.ink, theme.accent].map((color) => <i key={color} style={{ background: color }} />)}
@@ -1299,13 +1335,13 @@ function BackgroundPage({
           <div className="background-action-area">
             <button className="primary-button apply-large" onClick={onApply} disabled={!state.configured || applying} type="button">
               {applying ? <span className="spinner" /> : <Icon name="sparkles" size={18} />}
-              {state.active ? "重新应用效果" : "应用图片与主题色"}
+              {!settings.enabled ? "应用停用设置" : state.active ? "重新应用效果" : "应用图片背景"}
             </button>
             <div className="background-secondary-actions">
-              <button type="button" onClick={onRestore} disabled={!state.active || busy === "background-restore"}>
+              <button type="button" onClick={onRestore} disabled={(!state.active && !state.hasSession) || Boolean(busy)}>
                 <Icon name="undo" size={14} />移除当前效果
               </button>
-              <button type="button" onClick={onClear} disabled={!state.configured || busy === "background-clear"}>
+              <button type="button" onClick={onClear} disabled={(!state.configured && !state.warning && !state.hasSession) || Boolean(busy)}>
                 <Icon name="trash" size={14} />清除图片
               </button>
             </div>
@@ -1399,7 +1435,8 @@ function ThemePreview({
     "--preview-wallpaper-opacity": wallpaperSettings.opacity / 100,
     "--preview-wallpaper-mask": colorWithAlpha("#000000", wallpaperSettings.darkness / 100),
     "--preview-wallpaper-blur": `${wallpaperSettings.blur}px`,
-    "--preview-wallpaper-size": wallpaperSettings.fit === "contain" ? "contain" : `${wallpaperSettings.zoom}%`,
+    "--preview-wallpaper-size": wallpaperSettings.fit,
+    "--preview-wallpaper-scale": wallpaperSettings.fit === "contain" ? 1 : wallpaperSettings.zoom / 100,
     "--preview-wallpaper-position": `${wallpaperSettings.positionX}% ${wallpaperSettings.positionY}%`,
     "--preview-main-glass": colorWithAlpha(theme.surface, wallpaperSettings.panelOpacity / 100),
     "--preview-sidebar-glass": colorWithAlpha(
@@ -1417,7 +1454,7 @@ function ThemePreview({
 
   return (
     <div className={previewClass} style={variables}>
-      {hasWallpaper && <div className="mock-wallpaper-layer" aria-hidden="true" />}
+      {hasWallpaper && wallpaperSettings.scope === "all" && <div className="mock-wallpaper-layer" aria-hidden="true" />}
       <div className="mock-titlebar">
         <div className="window-dots"><i /><i /><i /></div>
         <span>ChatGPT · Codex</span>
@@ -1442,6 +1479,7 @@ function ThemePreview({
           <div className="mock-profile"><span>CS</span><div><strong>Local workspace</strong><small>仅在此设备</small></div></div>
         </aside>
         <main className="mock-main">
+          {hasWallpaper && wallpaperSettings.scope === "main" && <div className="mock-wallpaper-layer" aria-hidden="true" />}
           <div className="mock-chat-header">
             <div><strong>CodexSkin V1</strong><span>本地任务</span></div>
             <div className="mock-header-buttons"><button>Review</button><button>···</button></div>
@@ -1631,6 +1669,35 @@ function ResearchPage() {
   );
 }
 
+function ConfirmClearDialog({ busy, onClose, onConfirm }: { busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => previous?.focus();
+  }, []);
+  return <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}>
+    <div ref={ref} className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="clear-title"
+      onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => {
+        if (event.key === "Escape" && !busy) onClose();
+        if (event.key === "Tab") {
+          const buttons = ref.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+          if (!buttons?.length) return;
+          const first = buttons[0], last = buttons[buttons.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+      }}>
+      <h2 id="clear-title">清除保存的图片？</h2>
+      <p>先移除当前效果，再删除 CodexSkin 保存的图片副本与参数。你的原始图片不会被删除。若连接失败，将保留恢复信息，方便重试。</p>
+      <div className="dialog-actions">
+        <button className="secondary-button" type="button" disabled={busy} onClick={onClose}>取消</button>
+        <button className="primary-button" type="button" disabled={busy} onClick={onConfirm}>{busy ? "正在清除…" : "确认清除"}</button>
+      </div>
+    </div>
+  </div>;
+}
+
 function BackgroundRestartDialog({
   busy,
   onClose,
@@ -1648,7 +1715,7 @@ function BackgroundRestartDialog({
           <div><span>ONE-TIME RESTART</span><h2 id="background-restart-title">需要重开一次 ChatGPT</h2></div>
           <button type="button" onClick={onClose} disabled={busy} aria-label="关闭"><Icon name="close" /></button>
         </div>
-        <p>为了让图片背景只通过本机安全通道生效，ChatGPT 需要以增强模式重新打开。<strong>当前窗口和正在运行的任务会被关闭</strong>，但聊天记录不会被删除。</p>
+        <p>图片背景需要通过本机调试通道连接客户端。<strong>确认重开会关闭当前窗口，请先保存工作并等待任务结束。</strong>同机其他程序也可能访问此端口，请仅在可信设备开启；移除背景不关闭端口，完全退出并正常启动客户端后才会关闭。</p>
         <div className="restart-checklist">
           <div><span>1</span><p><strong>先保存工作</strong><small>等待正在运行的回复或任务结束。</small></p></div>
           <div><span>2</span><p><strong>自动重开</strong><small>仅增加 127.0.0.1 本机调试端口。</small></p></div>

@@ -8,6 +8,8 @@ export interface UserPreferences {
   recentThemeIds: string[];
   recentPairIds: string[];
   selectedThemeId: string | null;
+  selectedTheme: SkinTheme | null;
+  wallpaperDraft: WallpaperSettings | null;
 }
 
 interface PreferenceStorage {
@@ -22,6 +24,8 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   recentThemeIds: [],
   recentPairIds: [],
   selectedThemeId: null,
+  selectedTheme: null,
+  wallpaperDraft: null,
 };
 
 function cleanIds(value: unknown, limit = 64): string[] {
@@ -32,8 +36,25 @@ function cleanIds(value: unknown, limit = 64): string[] {
 }
 
 function defaultStorage(): PreferenceStorage | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage;
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function cleanTheme(value: unknown): SkinTheme | null {
+  try {
+    const theme = value as SkinTheme;
+    validateTheme(theme);
+    for (const key of ["id", "name", "englishName", "description"] as const) {
+      if (typeof theme[key] !== "string" || theme[key].length > 1000) return null;
+    }
+    if (!Array.isArray(theme.tags) || theme.tags.some((tag) => typeof tag !== "string")) return null;
+    return { ...theme, tags: theme.tags.slice(0, 32) };
+  } catch {
+    return null;
+  }
 }
 
 export function loadPreferences(storage: PreferenceStorage | null = defaultStorage()): UserPreferences {
@@ -50,6 +71,10 @@ export function loadPreferences(storage: PreferenceStorage | null = defaultStora
       recentPairIds: cleanIds(parsed.recentPairIds, MAX_RECENT),
       selectedThemeId: typeof parsed.selectedThemeId === "string" && parsed.selectedThemeId.length <= 160
         ? parsed.selectedThemeId
+        : null,
+      selectedTheme: cleanTheme(parsed.selectedTheme),
+      wallpaperDraft: parsed.wallpaperDraft && typeof parsed.wallpaperDraft === "object"
+        ? sanitizeWallpaperSettings(parsed.wallpaperDraft as Partial<WallpaperSettings>)
         : null,
     };
   } catch {
@@ -76,3 +101,6 @@ export function toggleId(ids: string[], id: string): string[] {
 export function recordRecent(ids: string[], id: string): string[] {
   return [id, ...ids.filter((value) => value !== id)].slice(0, MAX_RECENT);
 }
+import type { SkinTheme, WallpaperSettings } from "../types";
+import { validateTheme } from "./theme";
+import { sanitizeWallpaperSettings } from "./wallpaper";

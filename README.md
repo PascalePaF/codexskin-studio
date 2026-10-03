@@ -1,4 +1,4 @@
-# CodexSkin Studio 1.2.0
+# CodexSkin Studio 1.3.0
 
 [![Windows CI](https://github.com/PascalePaF/codexskin-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/PascalePaF/codexskin-studio/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-6e8cff.svg)](LICENSE)
@@ -7,18 +7,28 @@
 
 ## 下载 Windows 安装版
 
-前往 [GitHub Releases](https://github.com/PascalePaF/codexskin-studio/releases/latest) 下载 `CodexSkin Studio_1.2.0_x64-setup.exe`。当前社区构建没有商业代码签名证书，Windows 首次运行时可能显示“未知发布者”；发布页同时提供 SHA-256，便于校验文件完整性。
+前往 [GitHub Releases](https://github.com/PascalePaF/codexskin-studio/releases/latest) 下载 `CodexSkin Studio_1.3.0_x64-setup.exe`。当前社区构建没有商业代码签名证书，Windows 首次运行时可能显示“未知发布者”；发布页同时提供 SHA-256，便于校验文件完整性。
 
-## 1.2 已完成
+## V1.3.0 稳定性修复
+
+- 记住自定义颜色、字体和背景参数；刷新与换图不再丢失草稿
+- 后台执行耗时操作，防重复点击，网络超时与跨窗口失败回退
+- 完整图片解码、SHA-256 校验、先存新图再提交配置；损坏状态可重新选图修复
+- 修正铺满/完整显示、恢复点子表丢失、清除失败和小窗口可用性
+- 不再强制结束全部同名进程；正式程序不显示多余控制台
+
+详细复现和回归见 [V1.3.0 QA 记录](docs/QA-1.3.0.md)。
+
+## 功能
 
 - 选择本机 PNG、JPEG、WebP 作为 ChatGPT 图片背景，最大 8 MiB
 - 实时调整图片强度、暗色遮罩、模糊、缩放、水平/垂直焦点和面板透明度
-- 选择背景只进入主内容区，或延伸到整个窗口
+- 选择背景只进入主内容区，或延伸到侧栏；不改变原生标题栏和弹窗
 - 图片真实格式、像素尺寸与文件体积在 Rust 后端重新校验
 - 图片背景通过只绑定 `127.0.0.1` 的会话级增强通道应用，不修改 ChatGPT 安装文件
 - 首次启用若需要重开 ChatGPT，会先显示明确确认；默认不会中断当前任务
 - 一键移除当前效果或彻底清除 CodexSkin 保存的图片副本
-- 独立 Chromium 冒烟测试覆盖载入图片、注入、健康检查、应用状态和清理回退
+- 分层自动化：前端单元、Rust 临时目录/故障服务器、无头 Edge 界面流程与实际背景脚本渲染
 
 - 8 套原创浅色/深色主题，支持搜索与筛选
 - 4 组浅色/深色主题组合，可一次应用并跟随系统明暗切换
@@ -38,10 +48,15 @@
 
 ## 安装使用
 
+适配目标是 Windows 的 `OpenAI.Codex` 桌面包（当前进程名为 ChatGPT.exe）。不是对所有 ChatGPT 桌面应用、浏览器或 macOS 的通用换肤器。图片背景仍是实验功能。
+
+主题工坊的“应用”保存持久颜色/字体；图片背景页的“应用”只改变会话背景及其底色，不再隐式修改持久主题。调节草稿自动保存，必须点击应用才改变客户端。
+
+
 从源码执行 `npm run tauri build` 后，Windows x64 安装器位于：
 
 ```text
-src-tauri/target/release/bundle/nsis/CodexSkin Studio_1.2.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/CodexSkin Studio_1.3.0_x64-setup.exe
 ```
 
 也可以直接运行 `src-tauri/target/release/codexskin-studio.exe`。构建产物默认不提交到 Git；当前本地构建没有商业代码签名证书，Windows 可能显示“未知发布者”。
@@ -65,6 +80,7 @@ npm run dev
 
 ```powershell
 npm test
+npm run test:e2e
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build
@@ -92,13 +108,13 @@ npm run tauri build -- --no-bundle
 
 “一键应用到 ChatGPT”属于本机快速应用 Beta：它使用当前桌面客户端已经读写的外观键，但这些键尚未成为公开的长期配置契约。若未来客户端调整字段，仍可使用“复制官方格式”，在 ChatGPT 的 Settings → Appearance → Import 中导入。
 
-图片背景是明确标注的实验功能。官方文档目前只公开背景**颜色**，没有公开任意图片背景字段。CodexSkin 只接受固定图片类型和有限数值，生成自己的受限样式；HTTP 与 WebSocket 都必须是同一端口上的 `127.0.0.1`。它不会安装常驻服务、修改快捷方式或接受第三方脚本。关闭 ChatGPT 后增强层自动失效；保存的图片副本位于 CodexSkin 自己的应用数据目录。
+图片背景是明确标注的实验功能。官方文档目前只公开背景**颜色**，没有公开任意图片背景字段。CodexSkin 只接受固定图片类型和有限数值，生成自己的受限样式；HTTP 与 WebSocket 都必须是同一端口上的 `127.0.0.1`。它不会安装常驻服务、修改快捷方式或接受第三方脚本。整页刷新、新窗口或关闭后需重新应用；保存的图片副本位于 CodexSkin 自己的应用数据目录。移除效果不关闭调试端口，同机其他程序可能访问它；请仅在可信设备使用，完全退出并正常启动客户端后才关闭端口。
 
 ## 调研与产品判断
 
 完整调查、竞品矩阵、社区需求、风险与路线图见 [docs/RESEARCH.md](docs/RESEARCH.md)。
 
-1.2.0 的实施计划见 [docs/PLAN-1.2.0.md](docs/PLAN-1.2.0.md)，发布验证、已知边界与 SHA-256 见 [docs/RELEASE-NOTES-1.2.0.md](docs/RELEASE-NOTES-1.2.0.md)。
+发布验证、已知边界与 SHA-256 见 [docs/RELEASE-NOTES-1.3.0.md](docs/RELEASE-NOTES-1.3.0.md)。
 
 ## 许可证
 
